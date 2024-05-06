@@ -1,5 +1,6 @@
 /* Imports */
 #include "waitlib.h"
+#include <ArduinoBLE.h>
 
 /*  Button & LED pin definition */
 const int button = 2;
@@ -11,44 +12,93 @@ const int green_led2 = 10;
 const int blue_led2 = 11;
 
 /* PWM setup */ 
-const int max_analog = 255;
-const int min_analog = 0;
+const int MAX_ANALOG = 255;
+const int MIN_ANALOG = 0;
 
 /* Variable setup */
-bool enabled = false;
-int current_analog = min_analog;
+bool enabled = true;
+bool isBrightnessIncreasing = true;
+int current_analog = MIN_ANALOG;
 const unsigned long LED_WAIT = 50;
 const unsigned long INTERRUPT_WAIT = 250;
 
 WaitLib ledWait; 
 WaitLib interruptWait;
 
+/* BLE setup */
+BLEService bleService("018f4f57-a145-7e01-b0c8-1f8c51211152");
+BLEBoolCharacteristic switchCharacteristic("018f4f57-a145-7e01-b0c8-1f8c51211152", BLERead | BLEWrite);
+
 void setup() {
-  // put your setup code here, to run once:
+  Serial.begin(9600);
+
+  /* Pin setup */
   pinMode(red_led, OUTPUT);
   pinMode(green_led, OUTPUT);
   pinMode(blue_led, OUTPUT);
   pinMode(button, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(button), buttonPressed, FALLING);
+  writeAll(MIN_ANALOG);
 
-  writeAll(min_analog);
+  /* BLE Setup */
+  if (!BLE.begin()) {
+    Serial.println("starting Bluetooth® Low Energy module failed!");
+    while (1);
+  }
 
-  Serial.begin(9600);
+  /* BLE Service init */
+  BLE.setLocalName("Rowan's Bed");
+  BLE.setAdvertisedService(bleService);
+  bleService.addCharacteristic(switchCharacteristic);
+  BLE.addService(bleService);
+  switchCharacteristic.writeValue(enabled);
+  BLE.advertise();
+  Serial.println("BLE Service Init complete.");
 }
 
 void loop() {
-  while (current_analog < max_analog)
+  BLEDevice controller = BLE.central();
+  if (controller)
   {
-    current_analog += 5;
-    writeAll(current_analog);
-    while(!ledWait.isWaitOver(LED_WAIT)) {}
+    Serial.println("Connected to a central device.");
+    if (controller.connected())
+    {
+      if (switchCharacteristic.written())
+      {
+        enabled = switchCharacteristic.value();
+      }
+    }
   }
-  while(current_analog > min_analog)
+  if (ledWait.isWaitOver(LED_WAIT))
   {
-    current_analog -= 5;
-    writeAll(current_analog);
-    while(!ledWait.isWaitOver(LED_WAIT)) {}
+    if (isBrightnessIncreasing)
+    {
+      current_analog += 5;
+      writeAll(current_analog);
+      isBrightnessIncreasing = current_analog < MAX_ANALOG;
+    }
+    else
+    {
+      current_analog -= 5;
+      writeAll(current_analog);
+      isBrightnessIncreasing = current_analog <= MIN_ANALOG;
+    }
   }
+}
+
+void buttonPressed()
+{
+  if(interruptWait.isWaitOver(INTERRUPT_WAIT))
+  {
+    changeEnabled();
+  }
+}
+
+void changeEnabled()
+{
+  enabled = !enabled;
+  /* Write the ble characteristic to match the current state */
+  switchCharacteristic.writeValue(enabled);
 }
 
 void writeAll(int val)
@@ -73,16 +123,4 @@ void writeBlue(int val)
   analogWrite(blue_led, enabled ? val : 0);
 }
 
-void buttonPressed()
-{
-  if(interruptWait.isWaitOver(INTERRUPT_WAIT))
-  {
-    Serial.println("Changing enabled state.");
-    changeEnabled();
-  }
-}
 
-void changeEnabled()
-{
-  enabled = !enabled;
-}
